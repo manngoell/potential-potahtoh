@@ -1,0 +1,102 @@
+# 1. Imports
+import pandas as pd
+
+# 2. Configuration
+# --- File and Sheet Parameters ---
+PRIMARY_FILE_PATH = r"C:\Users\mangoel\OneDrive - Ciena Corporation\WLP_automation_folder\Master WLP L0 Super Collector as on 23-SEP-2025.xlsx"
+REFERENCE_FILE_PATH = r"C:\Users\mangoel\OneDrive - Ciena Corporation\WLP_automation_folder\WLP_NMS_services_UTL_comparsion_file_31_July_2025.xlsx"
+
+PRIMARY_SHEET_NAME = 'Filter_P'
+REFERENCE_SHEET_NAME = 'Link name reversed'
+
+# --- Column Name Parameters ---
+PRIMARY_COLUMN_NAME = 'Link Name'
+REFERENCE_COLUMN_NAME = 'Unnamed: 4'
+
+
+# --- Helper Function for Standardization ---
+def create_canonical_key(city_string):
+
+    try:
+        # Split the string by ' - ' and strip whitespace from each part
+        parts = sorted([part.strip() for part in city_string.split(' - ', 1)])
+        return '|'.join(parts)
+    except:
+        # Return a non-matching key for blank or malformed cells
+        return None
+
+
+# 3. Data Loading
+print("Step 1: Loading data from Excel files...")
+
+# Load the primary data file, keeping all original columns.
+df_primary = pd.read_excel(
+    io=PRIMARY_FILE_PATH,
+    sheet_name=PRIMARY_SHEET_NAME,
+)
+# Store the original column order to use for the final output
+original_columns = df_primary.columns.tolist()
+print(f"Primary file loaded successfully with {len(original_columns)} columns.")
+
+# Load ONLY the required column from the reference file to save memory.
+df_reference = pd.read_excel(
+    io=REFERENCE_FILE_PATH,
+    sheet_name=REFERENCE_SHEET_NAME,
+    usecols=[REFERENCE_COLUMN_NAME]
+)
+# Drop any empty rows from the reference column
+df_reference.dropna(subset=[REFERENCE_COLUMN_NAME], inplace=True)
+print("Reference file loaded.")
+
+
+# 4. Transformation Logic
+print("Step 2: Processing and standardizing data...")
+
+# --- Part A: Build the Canonical Mapping Dictionary ---
+# Create a highly efficient lookup map (dictionary).
+# The key is the standardized format (e.g., 'CityA|CityB').
+# The value is the desired format from the reference file (e.g., 'CityA - CityB').
+print("Building a reference map of correct connection names...")
+canonical_map = {
+    create_canonical_key(name): name 
+    for name in df_reference[REFERENCE_COLUMN_NAME]
+}
+
+# --- Part B: Apply the Transformation to the Primary DataFrame ---
+# Create the standardized key for the primary column.
+df_primary['canonical_key'] = df_primary[PRIMARY_COLUMN_NAME].apply(create_canonical_key)
+
+# Use the map to find the correct format.
+# If a key exists in our map, use the map's value; otherwise, keep the original name.
+# This preserves names that don't have a match in the reference file.
+df_primary[PRIMARY_COLUMN_NAME] = df_primary['canonical_key'].map(canonical_map).fillna(df_primary[PRIMARY_COLUMN_NAME])
+
+print("Data transformation complete. All other columns are preserved.")
+
+
+# 5. Data Export
+print("Step 3: Preparing final output and updating the original Excel file...")
+
+# --- Part A: Assemble the Final DataFrame ---
+# Select only the original columns in their original order.
+# This step drops the temporary 'canonical_key' helper column.
+df_final = df_primary[original_columns]
+
+# --- Part B: Export to Original Excel File ---
+# Use ExcelWriter in append mode with 'replace' to overwrite the specific sheet
+# while leaving other sheets in the workbook untouched.
+try:
+    with pd.ExcelWriter(
+        PRIMARY_FILE_PATH,
+        mode="a",
+        engine="openpyxl",
+        if_sheet_exists="replace"
+    ) as writer:
+        df_final.to_excel(writer, sheet_name=PRIMARY_SHEET_NAME, index=False)
+    
+    print(f"✅ Success! Sheet '{PRIMARY_SHEET_NAME}' in '{PRIMARY_FILE_PATH}' has been updated.")
+
+except FileNotFoundError:
+    print(f"❌ Error: The file was not found at {PRIMARY_FILE_PATH}. Please check the path.")
+except Exception as e:
+    print(f"❌ An unexpected error occurred: {e}")
